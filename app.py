@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy.optimize import linprog
-import matplotlib.pyplot as plt
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="切割優化器", layout="wide")

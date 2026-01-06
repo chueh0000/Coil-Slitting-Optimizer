@@ -2,7 +2,7 @@ runtime: python
 env: flex
 
 runtime_config:
-  operating_system: "ubuntu24"
-  runtime_version: "3.14"
+  operating_system: "ubuntu22"
+  runtime_version: "3.12"
 
 entrypoint: streamlit run app.py --server.port $PORT

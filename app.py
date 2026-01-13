@@ -8,21 +8,25 @@ st.set_page_config(page_title="切割優化器", layout="wide")
 
 st.title("✂️ 切割優化器")
 
+
+def clear_results():
+    if "optimization_result" in st.session_state:
+        st.session_state.optimization_result = None
+
 # --- SIDEBAR: GLOBAL CONFIGURATION ---
 with st.sidebar:
     st.header("⚙️ 原料設定")
-    MASTER_WIDTH = st.number_input("寬度 (mm)", value=1230.0, step=10.0)
-    THICKNESS = st.number_input("厚度 (mm)", value=1.0, step=0.1)
+    MASTER_WIDTH = st.number_input("寬度 (mm)", value=1230.0, step=10.0, on_change=clear_results)
+    THICKNESS = st.number_input("厚度 (mm)", value=1.0, step=0.1, on_change=clear_results)
     # User inputs kg/m^3, we convert to kg/mm^3 internally
-    density_input = st.number_input("密度 (kg/m³)", value=7930.0, step=10.0)
+    density_input = st.number_input("密度 (kg/m³)", value=7930.0, step=10.0, on_change=clear_results)
     DENSITY_KG_MM3 = density_input * 1e-9 
-    KERF = st.number_input("每次裁切損失寬度 (mm)", value=1.0, step=0.1)
+    KERF = st.number_input("每次裁切損失寬度 (mm)", value=1.0, step=0.1, on_change=clear_results)
 
 # --- MAIN SECTION: ORDER INPUT ---
 st.header("1. 訂單")
 st.info("請編輯下方的訂單清單。")
 
-# Default data matching your script
 default_data = [
     {"客戶名稱": "張三", "訂單號碼": "Z109984", "編號": "A", "寬度 (mm)": 124.0, "重量 (kg)": 1500},
     {"客戶名稱": "張三", "訂單號碼": "Z109985", "編號": "B", "寬度 (mm)": 77.6,  "重量 (kg)": 2200},
@@ -33,7 +37,12 @@ default_data = [
 ]
 
 df_input = pd.DataFrame(default_data)
-edited_df = st.data_editor(df_input, num_rows="dynamic", use_container_width=True)
+edited_df = st.data_editor(
+    df_input, 
+    num_rows="dynamic", 
+    use_container_width=True,
+    on_change=clear_results
+)
 
 # --- CALCULATION LOGIC ---
 def solve_cutting_stock(orders_df):
@@ -116,75 +125,103 @@ def solve_cutting_stock(orders_df):
     
     return res.x, patterns, demands_length, widths, ids
 
+
+# --- SESSION STATE INITIALIZATION ---
+if "optimization_result" not in st.session_state:
+    st.session_state.optimization_result = None
+if "processing" not in st.session_state:
+    st.session_state.processing = False
+
+def start_optimization():
+    st.session_state.processing = True
+
 # --- EXECUTION BUTTON ---
-if st.button("🚀 開始優化"):
+# The button is disabled if 'processing' is True
+st.button(
+    "🚀 開始優化", 
+    disabled=st.session_state.processing, 
+    on_click=start_optimization
+)
+
+# --- PROCESSING LOGIC ---
+if st.session_state.processing:
     if edited_df.empty:
         st.warning("請輸入至少一筆訂單資料。")
+        st.session_state.processing = False  # Reset state immediately on error
     else:
         with st.spinner("優化中，請稍候..."):
+            # Run the calculation
             result = solve_cutting_stock(edited_df)
-            
-        if result:
-            final_run_lengths, final_patterns, demands, item_widths, item_ids = result
-            
-            st.divider()
-            st.header("2. 優化結果")
-            
-            # --- SUMMARY METRICS ---
-            total_master_length = sum(final_run_lengths)
-            
-            # Waste Calculation
-            total_used_mass = total_master_length * MASTER_WIDTH * THICKNESS * DENSITY_KG_MM3
-            total_order_mass = edited_df["重量 (kg)"].sum()
-            waste_mass = total_used_mass - total_order_mass
-            waste_pct = (waste_mass / total_used_mass) * 100
-            
-            col1, col2, col3 = st.columns(3)
-            col1.metric("總原料長度需求", f"{total_master_length/1000:,.2f} m")
-            col2.metric("總處理重量", f"{total_used_mass:,.0f} kg")
-            col3.metric("預估廢料", f"{waste_pct:.2f}%", delta_color="inverse")
-            
-            # --- DETAILED PATTERN TABLE ---
-            st.subheader("切割方案明細")
-            
-            results_list = []
-            
-            for i, length in enumerate(final_run_lengths):
-                if length > 0.1:  # Filter out unused patterns
-                    pat_col = final_patterns[:, i]
-                    
-                    # Create a readable string for the mix
-                    mix_str = []
-                    used_width = 0
-                    
-                    # For visualization logic
-                    viz_widths = []
-                    viz_labels = []
-                    
-                    for j, count in enumerate(pat_col):
-                        if count > 0:
-                            mix_str.append(f"{item_ids[j]}: {int(count)}個")
-                            used_width += count * (item_widths[j] + KERF)
-                            # Add to viz lists
-                            for _ in range(int(count)):
-                                viz_widths.append(item_widths[j])
-                                viz_labels.append(item_ids[j])
-                    
-                    # Add Kerf adjustment for final usage calculation (remove last kerf)
-                    used_width -= KERF 
-                    
-                    results_list.append({
-                        # "Pattern ID": f"P{i+1}",
-                        "原料長度 (m)": length / 1000,
-                        "配置": ", ".join(mix_str),
-                        "寬度利用率 (%)": (used_width / MASTER_WIDTH) * 100
-                    })
+            # Store result in session state
+            st.session_state.optimization_result = result
+        
+        # Calculation done: re-enable button and force a rerun to show results
+        st.session_state.processing = False
+        st.rerun()
 
-            results_df = pd.DataFrame(results_list)
-            st.dataframe(
-                results_df.style.format({
-                    "原料長度 (m)": "{:.2f}", 
-                    "寬度利用率 (%)": "{:.3f}%"
-                }), 
-                use_container_width=True
-            )
+# --- DISPLAY RESULTS ---
+# Check if a result exists in session state to display
+if st.session_state.optimization_result:
+    final_run_lengths, final_patterns, demands, item_widths, item_ids = st.session_state.optimization_result
+    
+    st.divider()
+    st.header("2. 優化結果")
+    
+    # --- SUMMARY METRICS ---
+    total_master_length = sum(final_run_lengths)
+    
+    # Waste Calculation
+    total_used_mass = total_master_length * MASTER_WIDTH * THICKNESS * DENSITY_KG_MM3
+    total_order_mass = edited_df["重量 (kg)"].sum()
+    waste_mass = total_used_mass - total_order_mass
+    waste_pct = (waste_mass / total_used_mass) * 100
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("總原料長度需求", f"{total_master_length/1000:,.2f} m")
+    col2.metric("總處理重量", f"{total_used_mass:,.0f} kg")
+    col3.metric("預估廢料", f"{waste_pct:.2f}%", delta_color="inverse")
+    
+    # --- DETAILED PATTERN TABLE ---
+    st.subheader("切割方案明細")
+    
+    results_list = []
+    
+    for i, length in enumerate(final_run_lengths):
+        if length > 0.1:  # Filter out unused patterns
+            pat_col = final_patterns[:, i]
+            
+            # Create a readable string for the mix
+            mix_str = []
+            used_width = 0
+            
+            # For visualization logic
+            viz_widths = []
+            viz_labels = []
+            
+            for j, count in enumerate(pat_col):
+                if count > 0:
+                    mix_str.append(f"{item_ids[j]}: {int(count)}個")
+                    used_width += count * (item_widths[j] + KERF)
+                    # Add to viz lists
+                    for _ in range(int(count)):
+                        viz_widths.append(item_widths[j])
+                        viz_labels.append(item_ids[j])
+            
+            # Add Kerf adjustment for final usage calculation (remove last kerf)
+            used_width -= KERF 
+            
+            results_list.append({
+                # "Pattern ID": f"P{i+1}",
+                "原料長度 (m)": length / 1000,
+                "配置": ", ".join(mix_str),
+                "寬度利用率 (%)": (used_width / MASTER_WIDTH) * 100
+            })
+
+    results_df = pd.DataFrame(results_list)
+    st.dataframe(
+        results_df.style.format({
+            "原料長度 (m)": "{:.2f}", 
+            "寬度利用率 (%)": "{:.3f}%"
+        }), 
+        use_container_width=True
+    )
